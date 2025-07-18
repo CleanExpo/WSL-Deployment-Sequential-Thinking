@@ -124,6 +124,103 @@ function runGitAll(commitMsg: string) {
   }
 }
 
+function checkSystemForDeployment() {
+  safePrint("🔍 Running pre-deployment system check...");
+  let issues: string[] = [];
+  let warnings: string[] = [];
+
+  // Check Node.js
+  try {
+    const nodeVersion = execSync("node --version", { encoding: "utf8" }).trim();
+    safePrint(`✅ Node.js: ${nodeVersion}`);
+  } catch (error) {
+    issues.push("Node.js is not installed or not in PATH");
+    safePrint("❌ Node.js: Not found");
+  }
+
+  // Check npm
+  try {
+    const npmVersion = execSync("npm --version", { encoding: "utf8" }).trim();
+    safePrint(`✅ npm: ${npmVersion}`);
+  } catch (error) {
+    issues.push("npm is not installed or not in PATH");
+    safePrint("❌ npm: Not found");
+  }
+
+  // Check npx
+  try {
+    const npxVersion = execSync("npx --version", { encoding: "utf8" }).trim();
+    safePrint(`✅ npx: ${npxVersion}`);
+  } catch (error) {
+    warnings.push("npx is not available");
+    safePrint("⚠️  npx: Not found");
+  }
+
+  // Check Vercel CLI
+  try {
+    const vercelVersion = execSync("vercel --version", { encoding: "utf8" }).trim();
+    safePrint(`✅ Vercel CLI: ${vercelVersion}`);
+  } catch (error) {
+    try {
+      const npxVercelVersion = execSync("npx vercel --version", { encoding: "utf8" }).trim();
+      safePrint(`✅ Vercel CLI (via npx): ${npxVercelVersion}`);
+    } catch (npxError) {
+      warnings.push("Vercel CLI is not installed globally or via npx");
+      safePrint("⚠️  Vercel CLI: Not found");
+    }
+  }
+
+  // Check environment variables
+  if (process.env.VERCEL_TOKEN) {
+    safePrint(`✅ VERCEL_TOKEN: Set (${process.env.VERCEL_TOKEN.substring(0, 8)}...)`);
+  } else {
+    warnings.push("VERCEL_TOKEN environment variable not set");
+    safePrint("⚠️  VERCEL_TOKEN: Not set");
+  }
+
+  // Check current directory permissions
+  try {
+    const stats = fs.statSync(process.cwd());
+    if (stats.isDirectory()) {
+      safePrint(`✅ Current directory: ${process.cwd()}`);
+    }
+  } catch (error) {
+    issues.push("Cannot access current directory");
+    safePrint("❌ Current directory: Access denied");
+  }
+
+  // Check package.json
+  try {
+    const packageJsonPath = path.join(process.cwd(), "package.json");
+    if (fs.existsSync(packageJsonPath)) {
+      const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+      safePrint(`✅ package.json: Found (${packageJson.name || 'unnamed'})`);
+    } else {
+      warnings.push("No package.json found in current directory");
+      safePrint("⚠️  package.json: Not found");
+    }
+  } catch (error) {
+    warnings.push("Cannot read package.json");
+    safePrint("⚠️  package.json: Cannot read");
+  }
+
+  // Summary
+  if (issues.length > 0) {
+    safePrint("\n❌ Critical issues found:");
+    issues.forEach(issue => safePrint(`   • ${issue}`));
+    safePrint("\n🔧 Fix these issues before attempting deployment.");
+    return false;
+  }
+
+  if (warnings.length > 0) {
+    safePrint("\n⚠️  Warnings (deployment may still work):");
+    warnings.forEach(warning => safePrint(`   • ${warning}`));
+  }
+
+  safePrint("\n✅ System appears ready for deployment!");
+  return true;
+}
+
 function vercelDeploy() {
   // Detect Next.js misconfiguration: API-only build script with Next.js present
   const context = discoverProjectContext();
@@ -140,12 +237,110 @@ function vercelDeploy() {
     throw new Error("Next.js misconfiguration: API-only build script with Next.js detected");
   }
 
-  const deploy = spawnSync("vercel", ["--prod"], { stdio: "inherit" });
-  if (deploy.status !== 0) {
-    safePrint("❌ Vercel deploy failed. Double-check login or token.");
-    throw new Error("Vercel deploy error");
+  safePrint("🚀 Starting Vercel deployment with enhanced error handling...");
+  
+  // Strategy 1: Try standard vercel --prod
+  try {
+    safePrint("📤 Attempting: vercel --prod");
+    const deploy = spawnSync("vercel", ["--prod"], { 
+      stdio: "inherit",
+      env: { 
+        ...process.env,
+        VERCEL_TOKEN: process.env.VERCEL_TOKEN 
+      }
+    });
+    
+    if (deploy.status === 0) {
+      safePrint("✅ Vercel deployment successful!");
+      return;
+    }
+    
+    safePrint(`⚠️  vercel --prod failed with status ${deploy.status}. Trying alternatives...`);
+  } catch (error) {
+    safePrint(`⚠️  vercel --prod error: ${error}. Trying alternatives...`);
   }
-  safePrint("🌍 Site deploy triggered on Vercel!");
+
+  // Strategy 2: Try with token parameter
+  if (process.env.VERCEL_TOKEN) {
+    try {
+      safePrint("📤 Attempting: vercel --prod --token [TOKEN]");
+      const deployWithToken = spawnSync("vercel", ["--prod", "--token", process.env.VERCEL_TOKEN], { 
+        stdio: "inherit" 
+      });
+      
+      if (deployWithToken.status === 0) {
+        safePrint("✅ Vercel deployment successful with token!");
+        return;
+      }
+      
+      safePrint(`⚠️  vercel with token failed with status ${deployWithToken.status}. Trying npx...`);
+    } catch (error) {
+      safePrint(`⚠️  vercel with token error: ${error}. Trying npx...`);
+    }
+  }
+
+  // Strategy 3: Try with npx
+  try {
+    safePrint("📤 Attempting: npx vercel --prod");
+    const npxDeploy = spawnSync("npx", ["vercel", "--prod"], { 
+      stdio: "inherit",
+      env: { 
+        ...process.env,
+        VERCEL_TOKEN: process.env.VERCEL_TOKEN 
+      }
+    });
+    
+    if (npxDeploy.status === 0) {
+      safePrint("✅ Vercel deployment successful with npx!");
+      return;
+    }
+    
+    safePrint(`⚠️  npx vercel failed with status ${npxDeploy.status}. Trying manual execution...`);
+  } catch (error) {
+    safePrint(`⚠️  npx vercel error: ${error}. Trying manual execution...`);
+  }
+
+  // Strategy 4: Try with execSync for better error handling
+  try {
+    safePrint("📤 Attempting: execSync vercel deployment");
+    const projectRoot = process.cwd();
+    
+    if (process.env.VERCEL_TOKEN) {
+      execSync(`vercel --prod --token ${process.env.VERCEL_TOKEN} --yes`, { 
+        cwd: projectRoot, 
+        stdio: "inherit",
+        timeout: 300000 // 5 minute timeout
+      });
+    } else {
+      execSync("vercel --prod --yes", { 
+        cwd: projectRoot, 
+        stdio: "inherit",
+        timeout: 300000
+      });
+    }
+    
+    safePrint("✅ Vercel deployment successful with execSync!");
+    return;
+  } catch (error) {
+    safePrint(`⚠️  execSync vercel error: ${error}`);
+  }
+
+  // Strategy 5: Provide manual instructions
+  safePrint("\n❌ All automated deployment strategies failed.");
+  safePrint("\n🔧 Manual deployment instructions:");
+  safePrint("1. Check if Vercel CLI is installed: npm install -g vercel");
+  safePrint("2. Login to Vercel: vercel login");
+  safePrint("3. Set your token: export VERCEL_TOKEN=your_token_here");
+  safePrint("4. Deploy manually: vercel --prod");
+  
+  if (process.env.VERCEL_TOKEN) {
+    safePrint("\n💡 Try this command manually:");
+    safePrint(`vercel --prod --token ${process.env.VERCEL_TOKEN}`);
+  }
+  
+  safePrint("\n🔍 System diagnostics might help identify the issue.");
+  
+  throw new Error("All Vercel deployment strategies failed - manual intervention required");
 }
 
 export async function mcpHelperMenu() {
@@ -158,12 +353,13 @@ mainloop:
         type: "list",
         message: "What would you like to do?",
         choices: [
-          { name: "� Analyze Current Project", value: "analyze" },
+          { name: "📊 Analyze Current Project", value: "analyze" },
           { name: "📦 Deploy Project (Complete Pipeline)", value: "deploy" },
+          { name: "🔧 Fix Deployment Issues", value: "fix-deployment" },
           { name: "👀 Check for misplaced files and fix", value: "fixfiles" },
           { name: "🔐 SSH/GitHub Setup Wizard", value: "ssh-setup" },
           { name: "🏥 System Diagnostics & Setup", value: "diagnostics" },
-          { name: "🔧 Help / Troubleshooting Guide", value: "help" },
+          { name: "� Help / Troubleshooting Guide", value: "help" },
           { name: "🚪 Exit", value: "exit" }
         ]
       }
@@ -189,6 +385,24 @@ mainloop:
         
       case "deploy":
         try {
+          // Run system check first
+          safePrint("🔍 Checking system readiness...");
+          const systemReady = checkSystemForDeployment();
+          
+          if (!systemReady) {
+            const { continueAnyway } = await inquirer.prompt({
+              name: "continueAnyway",
+              type: "confirm",
+              message: "System check found critical issues. Continue anyway?",
+              default: false
+            });
+            
+            if (!continueAnyway) {
+              safePrint("💡 Fix the system issues and try again, or run System Diagnostics from the main menu.");
+              continue mainloop;
+            }
+          }
+
           // Quick system check before deployment
           const prereqCheck = await checkAllPrerequisites();
           const envCheck = await checkEnvironmentVariables();
@@ -254,6 +468,30 @@ mainloop:
               } else {
                 safePrint("💡 You can run the SSH setup wizard anytime from the main menu.");
               }
+            } else if (e.message.includes("All Vercel deployment strategies failed")) {
+              safePrint("\n🔧 Deployment failed with all strategies. Possible solutions:");
+              safePrint("1. Install Vercel CLI globally: npm install -g vercel");
+              safePrint("2. Login to Vercel: vercel login");
+              safePrint("3. Check your internet connection");
+              safePrint("4. Verify your Vercel token is valid");
+              safePrint("5. Try manual deployment outside this tool");
+              
+              const { tryManualFix } = await inquirer.prompt({
+                name: "tryManualFix",
+                type: "confirm",
+                message: "Would you like to try installing Vercel CLI now?",
+                default: true
+              });
+              
+              if (tryManualFix) {
+                try {
+                  safePrint("🔧 Installing Vercel CLI globally...");
+                  execSync("npm install -g vercel", { stdio: "inherit" });
+                  safePrint("✅ Vercel CLI installed. Try deployment again.");
+                } catch (installError) {
+                  safePrint("❌ Failed to install Vercel CLI. Manual installation required.");
+                }
+              }
             } else {
               throw e; // Re-throw other errors
             }
@@ -261,6 +499,78 @@ mainloop:
         } catch (e: any) {
           safePrint("🛑 An error occurred: " + (e instanceof Error ? e.message : String(e)));
         }
+        break;
+      case "fix-deployment":
+        safePrint("🔧 Deployment Issue Fixer");
+        safePrint("========================");
+        
+        // Run comprehensive system check
+        const isSystemReady = checkSystemForDeployment();
+        
+        if (!isSystemReady) {
+          const { fixNow } = await inquirer.prompt({
+            name: "fixNow",
+            type: "confirm",
+            message: "Would you like to attempt automatic fixes?",
+            default: true
+          });
+          
+          if (fixNow) {
+            // Try to install missing tools
+            try {
+              safePrint("🔧 Attempting to install Vercel CLI...");
+              execSync("npm install -g vercel", { stdio: "inherit" });
+              safePrint("✅ Vercel CLI installed successfully");
+            } catch (error) {
+              safePrint("❌ Failed to install Vercel CLI automatically");
+              safePrint("💡 Try manually: npm install -g vercel");
+            }
+            
+            // Re-check system
+            safePrint("\n🔍 Re-checking system...");
+            checkSystemForDeployment();
+          }
+        }
+        
+        // Test Vercel connectivity
+        safePrint("\n🌐 Testing Vercel connectivity...");
+        try {
+          if (process.env.VERCEL_TOKEN) {
+            execSync(`vercel whoami --token ${process.env.VERCEL_TOKEN}`, { stdio: "inherit" });
+            safePrint("✅ Vercel authentication successful");
+          } else {
+            execSync("vercel whoami", { stdio: "inherit" });
+            safePrint("✅ Vercel authentication successful");
+          }
+        } catch (error) {
+          safePrint("❌ Vercel authentication failed");
+          safePrint("💡 Try: vercel login");
+          
+          const { tryLogin } = await inquirer.prompt({
+            name: "tryLogin",
+            type: "confirm",
+            message: "Would you like to try logging in to Vercel now?",
+            default: true
+          });
+          
+          if (tryLogin) {
+            try {
+              execSync("vercel login", { stdio: "inherit" });
+              safePrint("✅ Vercel login completed");
+            } catch (loginError) {
+              safePrint("❌ Vercel login failed");
+            }
+          }
+        }
+        
+        // Provide manual fix instructions
+        safePrint("\n📋 Manual Fix Checklist:");
+        safePrint("1. ✓ Install Node.js 18+ from nodejs.org");
+        safePrint("2. ✓ Install Vercel CLI: npm install -g vercel");
+        safePrint("3. ✓ Login to Vercel: vercel login");
+        safePrint("4. ✓ Set environment: export VERCEL_TOKEN=your_token");
+        safePrint("5. ✓ Test deployment: vercel --prod");
+        
         break;
       case "ssh-setup":
         await sshSetupWizard();
