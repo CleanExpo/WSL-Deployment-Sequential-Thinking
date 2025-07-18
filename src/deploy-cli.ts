@@ -16,10 +16,21 @@ async function main() {
   
   // Parse command line arguments
   const isProd = args.includes('--prod') || args.includes('-p');
-  const commitMessage = args.find(arg => arg.startsWith('--message='))?.split('=')[1] ||
+  let commitMessage = args.find(arg => arg.startsWith('--message='))?.split('=')[1] ||
                        args[args.indexOf('--message') + 1] ||
-                       args[args.indexOf('-m') + 1] ||
-                       'Auto deployment from CLI';
+                       args[args.indexOf('-m') + 1];
+
+  // Prompt for commit message if not provided
+  if (!commitMessage) {
+    const inquirer = await import('inquirer');
+    const resp = await inquirer.default.prompt({
+      name: 'msg',
+      type: 'input',
+      message: 'Enter a commit message for this deployment:',
+      default: 'Auto deployment from CLI'
+    });
+    commitMessage = resp.msg;
+  }
 
   // Check if we're in a valid project directory
   const workingDir = process.cwd();
@@ -54,6 +65,7 @@ async function main() {
   console.log(`   Name: ${context.packageJson.name || 'unnamed'}`);
   console.log(`   Framework: ${context.framework || 'Generic Node.js'}`);
   console.log(`   Strategy: ${context.deploymentStrategy}`);
+  console.log('\n🔄 Pushing all changes to GitHub, then deploying to Vercel production...');
   
   // Check deployment readiness
   const readiness = analyzeDeploymentReadiness(context);

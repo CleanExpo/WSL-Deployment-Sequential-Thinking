@@ -19,16 +19,22 @@
   "author": "CleanExpo",
   "license": "MIT",
   "scripts": {
-    "build": "tsc && chmod +x dist/index.js",
+    "build": "tsc && chmod +x dist/index.js && chmod +x dist/vercel-wrapper.js",
     "start": "node dist/index.js",
     "test": "echo \"No tests yet\" && exit 0",
     "deploy": "node -e \"import('./dist/mcp-pipeline.js').then(m => m.runMCPDeploy(process.argv[1] || 'Auto deploy'))\"",
-    "vercel": "npm run build && node -e \"import('./dist/deployment-orchestrator.js').then(m => m.seamlessVercelDeploy())\"",
-    "vercel-prod": "npm run build && node dist/deploy-cli.js --prod",
-    "deploy-seamless": "npm run vercel-prod",
+    "vercel": "npm run build && node dist/vercel-wrapper.js",
+    "vercel --prod": "npm run build && node dist/vercel-wrapper.js --prod",
+    "vercel-prod": "npm run vercel -- --prod",
+    "deploy-seamless": "npm run vercel-prod", 
     "claude-deploy": "npm run vercel-prod",
     "mcp-helper": "ts-node --esm src/cli.ts",
-    "mcp-helper-built": "npm run build && node dist/cli.js"
+    "mcp-helper-built": "npm run build && node dist/cli.js",
+    "install-global": "npm run build && npm link"
+  },
+  "bin": {
+    "vercel-enhanced": "dist/vercel-wrapper.js",
+    "wsl-deploy": "dist/deploy-cli.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.3",
