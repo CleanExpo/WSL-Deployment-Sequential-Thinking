@@ -34,9 +34,20 @@ export function runMCPDeploy(commitMsg: string) {
   const root = process.cwd();
   console.log("🚀 Starting MCP deployment pipeline...");
   
-  scanForOrphanedFiles(root, 10);
-  gitStageCommitPush(commitMsg);
-  triggerVercelProdAndStreamLogs();
-  
-  console.log("✅ MCP deployment pipeline completed.");
+  try {
+    scanForOrphanedFiles(root, 10);
+    gitStageCommitPush(commitMsg);
+    triggerVercelProdAndStreamLogs();
+    console.log("✅ MCP deployment pipeline completed.");
+  } catch (error: any) {
+    if (error.message === "SSH_SETUP_NEEDED") {
+      console.error("🔑 SSH setup required for GitHub authentication.");
+      console.error("💡 Run 'npm run mcp-helper' and select 'SSH/GitHub Setup Wizard'");
+      console.error("   Or manually set up SSH keys for GitHub access.");
+      process.exit(1);
+    } else {
+      console.error("❌ Deployment failed:", error.message);
+      throw error;
+    }
+  }
 }

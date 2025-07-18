@@ -2,6 +2,8 @@ import inquirer from "inquirer";
 import path from "path";
 import fs from "fs";
 import { execSync, spawnSync } from "child_process";
+import { sshSetupWizard, quickSSHFix, checkSSHAgent, checkGitHubSSHConnection } from "./ssh-setup.js";
+import { runSystemDiagnostics, checkAllPrerequisites, checkEnvironmentVariables } from "./system-check.js";
 
 const PROJECT_ROOT = execSync("git rev-parse --show-toplevel", { encoding: "utf-8" }).trim();
 
@@ -19,6 +21,7 @@ This tool automates common steps:
 - Pushes to GitHub (checks for SSH)
 - Launches your Vercel deploy with visible logs
 - Detects misplaced files
+- Checks system prerequisites and environment variables
 
 Anything goes wrong, you'll get plain-English help.
 `);
@@ -58,11 +61,9 @@ function moveMisplacedFiles(issues: string[]) {
 }
 
 function ensureSSHAgent() {
-  try {
-    execSync("ssh-add -l", { stdio: "ignore" });
-  } catch {
-    safePrint("🔑 SSH agent not found. Please run 'eval \"$(ssh-agent -s)\" && ssh-add ~/.ssh/id_rsa'");
-    throw new Error("SSH agent missing");
+  if (!checkSSHAgent() || !checkGitHubSSHConnection()) {
+    safePrint("🔑 SSH authentication needs setup. Let's fix this...");
+    throw new Error("SSH_SETUP_NEEDED");
   }
 }
 
@@ -74,7 +75,10 @@ function runGitAll(commitMsg: string) {
     execSync(`git commit -m "${commitMsg}"`, { cwd: PROJECT_ROOT, stdio: "inherit" });
     execSync("git push", { cwd: PROJECT_ROOT, stdio: "inherit" });
     safePrint("✔️ All changes pushed successfully.");
-  } catch (err) {
+  } catch (err: any) {
+    if (err.message === "SSH_SETUP_NEEDED") {
+      throw err; // Let the caller handle SSH setup
+    }
     safePrint("❌ Git operation failed. Please check the SSH agent or verify remote settings.");
     throw err;
   }
@@ -101,6 +105,8 @@ mainloop:
         choices: [
           { name: "📦 Publish My Changes Online (Commit, Push, and Deploy)", value: "deploy" },
           { name: "👀 Check for misplaced files and fix", value: "fixfiles" },
+          { name: "🔐 SSH/GitHub Setup Wizard", value: "ssh-setup" },
+          { name: "🏥 System Diagnostics & Setup", value: "diagnostics" },
           { name: "🔧 Help / Troubleshooting Guide", value: "help" },
           { name: "🚪 Exit", value: "exit" }
         ]
@@ -109,6 +115,24 @@ mainloop:
     switch (resp.action) {
       case "deploy":
         try {
+          // Quick system check before deployment
+          const prereqCheck = await checkAllPrerequisites();
+          const envCheck = await checkEnvironmentVariables();
+          
+          if (!prereqCheck.passed) {
+            safePrint("⚠️  System prerequisites missing. Running diagnostics...");
+            const { runDiag } = await inquirer.prompt({
+              name: "runDiag",
+              type: "confirm",
+              message: "Would you like to run system diagnostics first?",
+              default: true
+            });
+            if (runDiag) {
+              await runSystemDiagnostics();
+              continue mainloop;
+            }
+          }
+
           const misplaced = checkMisplacedFiles();
           if (misplaced.length) {
             safePrint("⚠️  Files found outside your project root: " + misplaced.join(", "));
@@ -120,18 +144,55 @@ mainloop:
             if (fix.move) moveMisplacedFiles(misplaced);
             else continue mainloop;
           }
+          
           const { msg } = await inquirer.prompt({
             name: "msg",
             type: "input",
             message: "Enter a commit message:",
             default: "Update via MCP Helper"
           });
-          runGitAll(msg);
-          vercelDeploy();
-          safePrint("🎉 Done! Your changes are live.");
-        } catch (e) {
+          
+          try {
+            runGitAll(msg);
+            vercelDeploy();
+            safePrint("🎉 Done! Your changes are live.");
+          } catch (e: any) {
+            if (e.message === "SSH_SETUP_NEEDED") {
+              safePrint("🔐 SSH setup is required for GitHub authentication.");
+              const { runSetup } = await inquirer.prompt({
+                name: "runSetup",
+                type: "confirm",
+                message: "Would you like to run the SSH setup wizard now?",
+                default: true
+              });
+              if (runSetup) {
+                const success = await sshSetupWizard();
+                if (success) {
+                  safePrint("✅ SSH setup complete! Let's try deploying again...");
+                  try {
+                    runGitAll(msg);
+                    vercelDeploy();
+                    safePrint("🎉 Done! Your changes are live.");
+                  } catch (retryErr) {
+                    safePrint("🛑 Still having issues. Please check the troubleshooting guide.");
+                  }
+                }
+              } else {
+                safePrint("💡 You can run the SSH setup wizard anytime from the main menu.");
+              }
+            } else {
+              throw e; // Re-throw other errors
+            }
+          }
+        } catch (e: any) {
           safePrint("🛑 An error occurred: " + (e instanceof Error ? e.message : String(e)));
         }
+        break;
+      case "ssh-setup":
+        await sshSetupWizard();
+        break;
+      case "diagnostics":
+        await runSystemDiagnostics();
         break;
       case "fixfiles":
         const issues = checkMisplacedFiles();
@@ -153,6 +214,18 @@ Common Problems:
 - "git" errors: Are you connected to WiFi? Is your SSH key/agent ready?
 - "Vercel" errors: Run 'vercel login' or check that your Vercel token is valid.
 - Misplaced files: Use option [Check for misplaced files and fix] to recover orphaned code.
+- SSH/GitHub issues: Use the SSH Setup Wizard to generate keys and connect to GitHub.
+- System issues: Use System Diagnostics to check Node.js, dependencies, and environment variables.
+
+Quick SSH Check:
+- Run the SSH Setup Wizard from the main menu
+- It will detect missing keys, generate them, and guide you through GitHub setup
+- No technical knowledge required - just follow the step-by-step instructions
+
+System Requirements:
+- Node.js 18+, Git, Vercel CLI
+- Proper environment variables (.env file)
+- SSH keys for GitHub authentication
 
 For more FAQ, see CONTRIBUTING.md and README.md.
 `);
