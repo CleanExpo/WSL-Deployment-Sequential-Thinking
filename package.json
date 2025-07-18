@@ -15,7 +15,8 @@
   "scripts": {
     "build": "tsc && chmod +x dist/index.js",
     "start": "node dist/index.js",
-    "test": "echo \"No tests yet\" && exit 0"
+    "test": "echo \"No tests yet\" && exit 0",
+    "deploy": "node -e \"import('./dist/mcp-pipeline.js').then(m => m.runMCPDeploy(process.argv[1] || 'Auto deploy'))\""
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.3",
