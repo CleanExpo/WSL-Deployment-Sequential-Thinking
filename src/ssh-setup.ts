@@ -28,20 +28,26 @@ export function checkSSHAgent(): boolean {
   }
 }
 
-export function checkGitHubSSHConnection(): boolean {
+export function checkGitHubSSHConnection(): { success: boolean; message?: string } {
   try {
     const result = execSync("ssh -T git@github.com", { 
       stdio: "pipe", 
       timeout: 10000,
       encoding: "utf-8"
     });
-    return result.includes("successfully authenticated");
+    if (result.includes("successfully authenticated")) {
+      return { success: true };
+    }
+    return { success: false, message: "Authentication response not recognized" };
   } catch (error: any) {
     // GitHub SSH returns exit code 1 even on successful auth
     if (error.stdout && error.stdout.includes("successfully authenticated")) {
-      return true;
+      return { success: true };
     }
-    return false;
+    return { 
+      success: false, 
+      message: error.stderr || error.message || "SSH connection failed" 
+    };
   }
 }
 

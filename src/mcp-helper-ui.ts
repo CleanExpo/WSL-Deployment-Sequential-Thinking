@@ -119,7 +119,7 @@ mainloop:
           const prereqCheck = await checkAllPrerequisites();
           const envCheck = await checkEnvironmentVariables();
           
-          if (!prereqCheck.passed) {
+          if (!prereqCheck.criticalPassed) {
             safePrint("⚠️  System prerequisites missing. Running diagnostics...");
             const { runDiag } = await inquirer.prompt({
               name: "runDiag",

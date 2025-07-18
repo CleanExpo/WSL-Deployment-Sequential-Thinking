@@ -26,6 +26,28 @@ function safePrint(msg: string) {
   process.stdout.write(msg + "\n");
 }
 
+export function isWSL(): boolean {
+  try {
+    // Check for WSL-specific indicators
+    const release = fs.readFileSync('/proc/version', 'utf8').toLowerCase();
+    return release.includes('microsoft') || release.includes('wsl');
+  } catch {
+    return false;
+  }
+}
+
+export function isUbuntu(): boolean {
+  try {
+    if (os.platform() === 'linux') {
+      const release = fs.readFileSync('/etc/os-release', 'utf8').toLowerCase();
+      return release.includes('ubuntu');
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 export function checkNodeVersion(): boolean {
   try {
     const version = process.version;
@@ -68,6 +90,19 @@ export function checkWSLEnvironment(): boolean {
          fs.readFileSync("/proc/version", "utf-8").toLowerCase().includes("microsoft");
 }
 
+export function checkWSLConfiguration(): boolean {
+  if (!isWSL()) return true;
+  
+  try {
+    // Check if git is configured properly in WSL
+    execSync("git config --global user.name", { stdio: "pipe" });
+    execSync("git config --global user.email", { stdio: "pipe" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function checkEnvFile(): boolean {
   return fs.existsSync(".env") || fs.existsSync(".env.local");
 }
@@ -94,42 +129,62 @@ const ENVIRONMENT_VARIABLES: EnvironmentVariable[] = [
   },
   {
     name: "VERCEL_TOKEN",
-    description: "Vercel API token for deployments",
-    required: false,
+    description: "Vercel API token for deployments (CRITICAL for Claude Code CLI)",
+    required: true,
+    validation: (value) => value.length > 20 && value.startsWith('vercel_'),
     instructions: [
+      "🔑 REQUIRED for deployment from Claude Code CLI:",
       "1. Go to https://vercel.com/account/tokens",
-      "2. Create a new token",
-      "3. Copy the token and paste it here"
+      "2. Click 'Create Token'",
+      "3. Name it 'Claude-CLI-Token'", 
+      "4. Set expiration (recommend 'No Expiration' for development)",
+      "5. Copy the token (starts with 'vercel_')",
+      "6. Paste it here",
+      "",
+      "⚠️  WSL/Ubuntu Note: Token must be set in .env file",
+      "💡 Alternative: Run 'vercel login' first, then set token"
     ]
   },
   {
     name: "VERCEL_ORG_ID",
-    description: "Vercel organization ID",
+    description: "Vercel organization ID (recommended for team projects)",
     required: false,
+    validation: (value) => !value || value.startsWith('team_') || value.startsWith('user_'),
     instructions: [
       "1. Run 'vercel' in your project directory",
-      "2. Look for 'org_' in the output",
-      "3. Copy the organization ID"
+      "2. Look for 'org_' or 'team_' in the output",
+      "3. Copy the organization ID",
+      "4. Or leave empty for personal account"
     ]
   },
   {
-    name: "VERCEL_PROJECT_ID",
-    description: "Vercel project ID",
+    name: "VERCEL_PROJECT_ID", 
+    description: "Vercel project ID (speeds up deployments)",
     required: false,
+    validation: (value) => !value || value.startsWith('prj_'),
     instructions: [
-      "1. Run 'vercel' in your project directory", 
+      "1. Run 'vercel' in your project directory first time", 
       "2. Look for 'prj_' in the output",
-      "3. Copy the project ID"
+      "3. Copy the project ID",
+      "4. Or leave empty for auto-detection"
     ]
   },
   {
     name: "GITHUB_TOKEN",
-    description: "GitHub personal access token (for advanced features)",
+    description: "GitHub personal access token (CRITICAL for SSH issues)",
     required: false,
+    validation: (value) => !value || (value.length >= 40 && (value.startsWith('ghp_') || value.startsWith('github_pat_'))),
     instructions: [
+      "🔑 HIGHLY RECOMMENDED for WSL/Ubuntu deployment:",
       "1. Go to https://github.com/settings/tokens",
-      "2. Generate a new token with repo permissions",
-      "3. Copy and paste the token"
+      "2. Click 'Generate new token (classic)'",
+      "3. Select scopes: 'repo', 'workflow', 'write:packages'",
+      "4. Set expiration (90 days recommended)",
+      "5. Copy the token (starts with 'ghp_')",
+      "6. Paste it here",
+      "",
+      "🚀 This enables HTTPS fallback when SSH fails",
+      "💡 Especially important in WSL environments"
     ]
   }
 ];
@@ -141,6 +196,8 @@ const PREREQUISITES: PrerequisiteCheck[] = [
     check: checkNodeVersion,
     instructions: [
       "Install Node.js 18+ from https://nodejs.org",
+      "WSL/Ubuntu: curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -",
+      "Then: sudo apt-get install -y nodejs",
       "Or use nvm: nvm install 18 && nvm use 18"
     ],
     critical: true
@@ -149,9 +206,21 @@ const PREREQUISITES: PrerequisiteCheck[] = [
     name: "Git",
     description: "Git version control system",
     check: checkGitInstalled,
+    fix: async () => {
+      if (isUbuntu()) {
+        try {
+          execSync("sudo apt update && sudo apt install -y git", { stdio: "inherit" });
+          return true;
+        } catch {
+          return false;
+        }
+      }
+      return false;
+    },
     instructions: [
-      "Install Git from https://git-scm.com",
-      "Or on Ubuntu/WSL: sudo apt update && sudo apt install git"
+      "Ubuntu/WSL: sudo apt update && sudo apt install -y git",
+      "Or install from: https://git-scm.com",
+      "Verify with: git --version"
     ],
     critical: true
   },
@@ -159,9 +228,18 @@ const PREREQUISITES: PrerequisiteCheck[] = [
     name: "Git Repository",
     description: "Project is in a Git repository",
     check: checkGitRepository,
+    fix: async () => {
+      try {
+        execSync("git init", { stdio: "inherit" });
+        return true;
+      } catch {
+        return false;
+      }
+    },
     instructions: [
       "Initialize Git: git init",
-      "Add remote: git remote add origin YOUR_GITHUB_URL"
+      "Add remote: git remote add origin YOUR_GITHUB_URL",
+      "💡 Make sure you have SSH keys setup for GitHub"
     ],
     critical: true
   },
@@ -171,15 +249,17 @@ const PREREQUISITES: PrerequisiteCheck[] = [
     check: checkVercelCLI,
     fix: async () => {
       try {
+        safePrint("📦 Installing Vercel CLI globally...");
         execSync("npm install -g vercel", { stdio: "inherit" });
-        return true;
+        return checkVercelCLI();
       } catch {
         return false;
       }
     },
     instructions: [
-      "Install Vercel CLI: npm install -g vercel",
-      "Or using yarn: yarn global add vercel"
+      "Install: npm install -g vercel",
+      "WSL/Ubuntu may need: sudo npm install -g vercel",
+      "Verify with: vercel --version"
     ],
     critical: false
   },
@@ -189,6 +269,7 @@ const PREREQUISITES: PrerequisiteCheck[] = [
     check: checkVercelAuth,
     fix: async () => {
       try {
+        safePrint("🔐 Starting Vercel authentication...");
         execSync("vercel login", { stdio: "inherit" });
         return checkVercelAuth();
       } catch {
@@ -197,32 +278,89 @@ const PREREQUISITES: PrerequisiteCheck[] = [
     },
     instructions: [
       "Run: vercel login",
-      "Follow the authentication prompts"
+      "Choose your preferred authentication method",
+      "💡 Email/password or GitHub OAuth recommended for WSL"
+    ],
+    critical: false
+  },
+  {
+    name: "WSL Environment Check",
+    description: "WSL-specific configuration validation",
+    check: () => !isWSL() || checkWSLConfiguration(),
+    instructions: [
+      "Ensure WSL2 is being used (not WSL1)",
+      "Check: wsl --list --verbose",
+      "Upgrade if needed: wsl --set-version <distro> 2"
     ],
     critical: false
   }
 ];
 
-export async function checkAllPrerequisites(): Promise<{ passed: boolean; issues: string[] }> {
+export async function checkAllPrerequisites(): Promise<{ 
+  allPassed: boolean; 
+  criticalPassed: boolean;
+  issues: string[];
+  results: { [key: string]: { success: boolean; critical: boolean; message?: string } }
+}> {
   const issues: string[] = [];
+  const results: { [key: string]: { success: boolean; critical: boolean; message?: string } } = {};
   let criticalIssues = 0;
+  let totalIssues = 0;
 
   safePrint("🔍 Checking system prerequisites...\n");
+  
+  // Special WSL/Ubuntu detection
+  if (isWSL()) {
+    safePrint("🐧 WSL environment detected");
+  }
+  if (isUbuntu()) {
+    safePrint("🐧 Ubuntu system detected");
+  }
 
   for (const prereq of PREREQUISITES) {
-    const passed = prereq.check();
-    const status = passed ? "✅" : (prereq.critical ? "❌" : "⚠️ ");
-    safePrint(`${status} ${prereq.name}: ${prereq.description}`);
-    
-    if (!passed) {
+    try {
+      const passed = prereq.check();
+      const status = passed ? "✅" : (prereq.critical ? "❌" : "⚠️ ");
+      safePrint(`${status} ${prereq.name}: ${prereq.description}`);
+      
+      results[prereq.name.toLowerCase().replace(/[^a-z0-9]/g, '')] = {
+        success: passed,
+        critical: prereq.critical,
+        message: passed ? undefined : prereq.instructions.join("; ")
+      };
+      
+      if (!passed) {
+        totalIssues++;
+        if (prereq.critical) criticalIssues++;
+        issues.push(`${prereq.name}: ${prereq.instructions.join(", ")}`);
+      }
+    } catch (error: any) {
+      safePrint(`⚠️  ${prereq.name}: Check failed - ${error.message}`);
+      results[prereq.name.toLowerCase().replace(/[^a-z0-9]/g, '')] = {
+        success: false,
+        critical: prereq.critical,
+        message: `Check failed: ${error.message}`
+      };
+      totalIssues++;
       if (prereq.critical) criticalIssues++;
-      issues.push(`${prereq.name}: ${prereq.instructions.join(", ")}`);
     }
   }
 
+  safePrint(`\n📊 Summary: ${PREREQUISITES.length - totalIssues}/${PREREQUISITES.length} checks passed`);
+  
+  if (criticalIssues > 0) {
+    safePrint(`❌ ${criticalIssues} critical issues must be resolved`);
+  }
+  
+  if (totalIssues > criticalIssues) {
+    safePrint(`⚠️  ${totalIssues - criticalIssues} optional improvements available`);
+  }
+
   return { 
-    passed: criticalIssues === 0, 
-    issues 
+    allPassed: totalIssues === 0,
+    criticalPassed: criticalIssues === 0, 
+    issues,
+    results
   };
 }
 
@@ -389,7 +527,7 @@ This will check all requirements for successful deployment:
   // Check prerequisites
   const prereqResult = await checkAllPrerequisites();
   
-  if (!prereqResult.passed) {
+  if (!prereqResult.criticalPassed) {
     safePrint("\n❌ Critical issues found with system prerequisites:");
     prereqResult.issues.forEach(issue => safePrint(`   • ${issue}`));
     
@@ -425,7 +563,7 @@ This will check all requirements for successful deployment:
   const finalPrereqCheck = await checkAllPrerequisites();
   const finalEnvCheck = await checkEnvironmentVariables();
   
-  if (finalPrereqCheck.passed && finalEnvCheck.passed) {
+  if (finalPrereqCheck.criticalPassed && finalEnvCheck.passed) {
     safePrint("\n🎉 All systems ready! Your MCP deployment environment is properly configured.");
     return true;
   } else {
