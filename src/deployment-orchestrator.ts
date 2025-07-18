@@ -2,26 +2,33 @@ import { execSync, spawn } from "child_process";
 import { checkAllPrerequisites, setupEnvironmentVariables } from "./system-check.js";
 import { sshSetupWizard, checkGitHubSSHConnection } from "./ssh-setup.js";
 import { gitStageCommitPush } from "./git-helper.js";
+import { 
+  discoverProjectContext, 
+  loadProjectEnvironment, 
+  analyzeDeploymentReadiness,
+  generateDeploymentGuide,
+  validateProjectForDeployment,
+  ProjectContext 
+} from "./project-context.js";
 import fs from "fs";
 import path from "path";
 import dotenv from "dotenv";
-
-// Load environment variables
-dotenv.config();
 
 export interface DeploymentConfig {
   skipChecks?: boolean;
   autoFix?: boolean;
   commitMessage?: string;
   forceSSHSetup?: boolean;
+  projectRoot?: string;
 }
 
 export class DeploymentOrchestrator {
   private projectRoot: string;
   private config: DeploymentConfig;
+  private projectContext: ProjectContext;
 
   constructor(config: DeploymentConfig = {}) {
-    this.projectRoot = process.cwd();
+    this.projectRoot = config.projectRoot || process.cwd();
     this.config = {
       skipChecks: false,
       autoFix: true,
@@ -29,6 +36,22 @@ export class DeploymentOrchestrator {
       forceSSHSetup: false,
       ...config
     };
+    
+    // Discover and analyze the project
+    this.projectContext = discoverProjectContext(this.projectRoot);
+    
+    // Load project environment variables
+    const projectEnv = loadProjectEnvironment(this.projectContext);
+    
+    // Merge project env with system env (system takes precedence)
+    Object.keys(projectEnv).forEach(key => {
+      if (!process.env[key]) {
+        process.env[key] = projectEnv[key];
+      }
+    });
+    
+    // Also load with dotenv for good measure
+    dotenv.config({ path: path.join(this.projectRoot, '.env') });
   }
 
   /**
@@ -37,8 +60,14 @@ export class DeploymentOrchestrator {
   async runSeamlessDeployment(): Promise<void> {
     console.log("🚀 Starting seamless deployment pipeline...");
     console.log("📍 Working directory:", this.projectRoot);
+    
+    // Show project analysis
+    this.displayProjectAnalysis();
 
     try {
+      // Step 0: Validate project is deployable
+      await this.validateProject();
+
       // Step 1: Pre-deployment checks
       if (!this.config.skipChecks) {
         await this.runPreDeploymentChecks();
@@ -47,10 +76,13 @@ export class DeploymentOrchestrator {
       // Step 2: Ensure GitHub connection
       await this.ensureGitHubConnection();
 
-      // Step 3: Commit and push changes
+      // Step 3: Build project if needed
+      await this.buildProject();
+
+      // Step 4: Commit and push changes
       await this.commitAndPushChanges();
 
-      // Step 4: Deploy to Vercel
+      // Step 5: Deploy to Vercel
       await this.deployToVercel();
 
       console.log("✅ Seamless deployment completed successfully!");
@@ -60,6 +92,101 @@ export class DeploymentOrchestrator {
       console.error("❌ Deployment failed:", error.message);
       await this.handleDeploymentError(error);
       throw error;
+    }
+  }
+
+  /**
+   * Display project analysis information
+   */
+  private displayProjectAnalysis(): void {
+    console.log("\n📊 Project Analysis:");
+    console.log(`   Name: ${this.projectContext.packageJson?.name || 'Unknown'}`);
+    console.log(`   Framework: ${this.projectContext.framework || 'None detected'}`);
+    console.log(`   Strategy: ${this.projectContext.deploymentStrategy}`);
+    console.log(`   Environment files: ${this.projectContext.envFiles.length}`);
+    
+    if (this.projectContext.envFiles.length > 0) {
+      console.log("   Found env files:");
+      this.projectContext.envFiles.forEach(file => 
+        console.log(`     • ${path.basename(file)}`)
+      );
+    }
+    
+    console.log("");
+  }
+
+  /**
+   * Validate that the project can be deployed
+   */
+  private async validateProject(): Promise<void> {
+    console.log("🔍 Validating project for deployment...");
+    
+    const validation = validateProjectForDeployment(this.projectContext);
+    
+    if (!validation.canDeploy) {
+      console.log("❌ Project validation failed:");
+      validation.blockers.forEach(blocker => console.log(`   • ${blocker}`));
+      
+      if (this.config.autoFix) {
+        console.log("🔧 Attempting to fix project issues...");
+        await this.fixProjectIssues(validation.blockers);
+      } else {
+        throw new Error("Project validation failed. Fix issues before deployment.");
+      }
+    }
+    
+    if (validation.warnings.length > 0) {
+      console.log("⚠️  Project warnings:");
+      validation.warnings.forEach(warning => console.log(`   • ${warning}`));
+    }
+    
+    console.log("✅ Project validation passed");
+  }
+
+  /**
+   * Build the project if a build script exists
+   */
+  private async buildProject(): Promise<void> {
+    if (!this.projectContext.buildScript) {
+      console.log("ℹ️  No build script found, skipping build step");
+      return;
+    }
+    
+    console.log(`🔨 Building project with: ${this.projectContext.buildScript}`);
+    
+    try {
+      execSync('npm run build', { 
+        stdio: 'inherit', 
+        cwd: this.projectRoot,
+        env: { ...process.env }
+      });
+      console.log("✅ Build completed successfully");
+    } catch (error) {
+      console.error("❌ Build failed");
+      throw new Error("Build failed. Fix build errors before deployment.");
+    }
+  }
+
+  /**
+   * Attempt to fix common project issues automatically
+   */
+  private async fixProjectIssues(blockers: string[]): Promise<void> {
+    for (const blocker of blockers) {
+      if (blocker.includes("Git repository not initialized")) {
+        console.log("🔧 Initializing Git repository...");
+        try {
+          execSync('git init', { cwd: this.projectRoot, stdio: 'inherit' });
+          console.log("✅ Git repository initialized");
+        } catch (error) {
+          console.error("❌ Failed to initialize Git repository");
+        }
+      }
+      
+      if (blocker.includes("No package.json")) {
+        console.log("⚠️  This doesn't appear to be a Node.js project");
+        console.log("💡 Make sure you're in the correct project directory");
+        throw new Error("Cannot deploy non-Node.js projects with this tool");
+      }
     }
   }
 
@@ -85,7 +212,14 @@ export class DeploymentOrchestrator {
     await this.ensureEnvironmentVariables();
 
     // Verify project structure
-    this.verifyProjectStructure();
+    console.log("📁 Verifying project structure...");
+    
+    // Use project context instead of manual checks
+    if (!this.projectContext.packageJson) {
+      throw new Error("No package.json found - not a Node.js project");
+    }
+    
+    console.log("✅ Project structure verified");
 
     console.log("✅ Pre-deployment checks passed");
   }
@@ -264,39 +398,6 @@ export class DeploymentOrchestrator {
         reject(new Error(`Vercel deployment process error: ${error.message}`));
       });
     });
-  }
-
-  /**
-   * Verify project structure is ready for deployment
-   */
-  private verifyProjectStructure(): void {
-    console.log("📁 Verifying project structure...");
-
-    const requiredFiles = ['package.json'];
-    const buildOutputs = ['dist/', 'build/', '.next/', '.vercel/'];
-
-    // Check required files
-    for (const file of requiredFiles) {
-      const filePath = path.join(this.projectRoot, file);
-      if (!fs.existsSync(filePath)) {
-        throw new Error(`Required file missing: ${file}`);
-      }
-    }
-
-    // Check if build is needed
-    const packageJson = JSON.parse(fs.readFileSync(path.join(this.projectRoot, 'package.json'), 'utf8'));
-    
-    if (packageJson.scripts?.build) {
-      console.log("🔨 Build script detected, running build...");
-      try {
-        execSync('npm run build', { stdio: 'inherit', cwd: this.projectRoot });
-        console.log("✅ Build completed successfully");
-      } catch (error) {
-        throw new Error("Build failed. Fix build errors before deployment.");
-      }
-    }
-
-    console.log("✅ Project structure verified");
   }
 
   /**

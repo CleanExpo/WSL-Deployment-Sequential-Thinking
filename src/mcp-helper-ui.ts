@@ -4,38 +4,74 @@ import fs from "fs";
 import { execSync, spawnSync } from "child_process";
 import { sshSetupWizard, quickSSHFix, checkSSHAgent, checkGitHubSSHConnection } from "./ssh-setup.js";
 import { runSystemDiagnostics, checkAllPrerequisites, checkEnvironmentVariables } from "./system-check.js";
-
-const PROJECT_ROOT = execSync("git rev-parse --show-toplevel", { encoding: "utf-8" }).trim();
+import { discoverProjectContext, generateDeploymentGuide, analyzeDeploymentReadiness } from "./project-context.js";
 
 function safePrint(msg: string) {
   process.stdout.write(msg + "\n");
+}
+
+function showProjectInfo() {
+  const context = discoverProjectContext();
+  
+  safePrint(`
+📊 Current Project Analysis:
+  
+📁 Project: ${context.packageJson?.name || 'Unknown'}
+🏗️  Framework: ${context.framework || 'None detected'}
+🚀 Strategy: ${context.deploymentStrategy}
+📝 Build Script: ${context.buildScript || 'None'}
+🔐 Environment Files: ${context.envFiles.length}
+
+${context.envFiles.length > 0 ? 
+  `📋 Found Environment Files:\n${context.envFiles.map(f => `   • ${path.basename(f)}`).join('\n')}` : 
+  '⚠️  No environment files found'}
+  
+${context.deploymentDocs.length > 0 ? 
+  `📚 Documentation:\n${context.deploymentDocs.map(f => `   • ${path.basename(f)}`).join('\n')}` : 
+  '💡 Consider adding deployment documentation'}
+`);
+
+  const readiness = analyzeDeploymentReadiness(context);
+  
+  if (readiness.ready) {
+    safePrint("✅ Project appears ready for deployment!");
+  } else {
+    safePrint("⚠️  Issues found:");
+    readiness.issues.forEach(issue => safePrint(`   • ${issue}`));
+  }
+  
+  if (readiness.recommendations.length > 0) {
+    safePrint("\n💡 Recommendations:");
+    readiness.recommendations.forEach(rec => safePrint(`   • ${rec}`));
+  }
 }
 
 function showHelp() {
   safePrint(`
 Welcome to the MCP Deployment Helper!
 
-This tool automates common steps:
-- Adds/saves code changes
-- Commits to git
-- Pushes to GitHub (checks for SSH)
-- Launches your Vercel deploy with visible logs
-- Detects misplaced files
-- Checks system prerequisites and environment variables
+This tool helps you deploy any project from Claude Code CLI:
+- Analyzes your current project structure and requirements
+- Checks system prerequisites (Node.js, Git, Vercel CLI)
+- Validates environment variables and tokens
+- Sets up GitHub SSH authentication
+- Provides deployment guidance specific to your project
 
-Anything goes wrong, you'll get plain-English help.
+Works with any Node.js project in any directory!
 `);
 }
 
 function checkMisplacedFiles() {
   let issues: string[] = [];
+  const projectRoot = process.cwd();
+  
   function walk(dir: string) {
     try {
       fs.readdirSync(dir).forEach((file) => {
         const resolved = path.join(dir, file);
         if (fs.lstatSync(resolved).isDirectory() && !resolved.includes("node_modules") && !file.startsWith('.')) {
           walk(resolved);
-        } else if (!resolved.startsWith(PROJECT_ROOT)) {
+        } else if (!resolved.startsWith(projectRoot)) {
           issues.push(resolved);
         }
       });
@@ -43,15 +79,17 @@ function checkMisplacedFiles() {
       // Skip directories we can't read
     }
   }
-  walk(PROJECT_ROOT);
+  walk(projectRoot);
   return issues;
 }
 
 function moveMisplacedFiles(issues: string[]) {
+  const projectRoot = process.cwd();
+  
   for (const file of issues) {
     try {
       const basename = path.basename(file);
-      const dest = path.join(PROJECT_ROOT, basename);
+      const dest = path.join(projectRoot, basename);
       fs.renameSync(file, dest);
       safePrint(`Moved ${file} → ${dest}`);
     } catch (err) {
@@ -69,11 +107,13 @@ function ensureSSHAgent() {
 
 function runGitAll(commitMsg: string) {
   ensureSSHAgent();
+  const projectRoot = process.cwd();
+  
   try {
-    execSync("git add -A", { cwd: PROJECT_ROOT, stdio: "inherit" });
-    execSync("git status --short", { cwd: PROJECT_ROOT, stdio: "inherit" });
-    execSync(`git commit -m "${commitMsg}"`, { cwd: PROJECT_ROOT, stdio: "inherit" });
-    execSync("git push", { cwd: PROJECT_ROOT, stdio: "inherit" });
+    execSync("git add -A", { cwd: projectRoot, stdio: "inherit" });
+    execSync("git status --short", { cwd: projectRoot, stdio: "inherit" });
+    execSync(`git commit -m "${commitMsg}"`, { cwd: projectRoot, stdio: "inherit" });
+    execSync("git push", { cwd: projectRoot, stdio: "inherit" });
     safePrint("✔️ All changes pushed successfully.");
   } catch (err: any) {
     if (err.message === "SSH_SETUP_NEEDED") {
@@ -103,7 +143,8 @@ mainloop:
         type: "list",
         message: "What would you like to do?",
         choices: [
-          { name: "📦 Publish My Changes Online (Commit, Push, and Deploy)", value: "deploy" },
+          { name: "� Analyze Current Project", value: "analyze" },
+          { name: "📦 Deploy Project (Complete Pipeline)", value: "deploy" },
           { name: "👀 Check for misplaced files and fix", value: "fixfiles" },
           { name: "🔐 SSH/GitHub Setup Wizard", value: "ssh-setup" },
           { name: "🏥 System Diagnostics & Setup", value: "diagnostics" },
@@ -113,6 +154,24 @@ mainloop:
       }
     ]);
     switch (resp.action) {
+      case "analyze":
+        showProjectInfo();
+        
+        const { generateGuide } = await inquirer.prompt({
+          name: "generateGuide",
+          type: "confirm",
+          message: "Would you like to generate a deployment guide for this project?",
+          default: false
+        });
+        
+        if (generateGuide) {
+          const context = discoverProjectContext();
+          const guide = generateDeploymentGuide(context);
+          fs.writeFileSync('DEPLOYMENT-GUIDE.md', guide);
+          safePrint("📝 Deployment guide created: DEPLOYMENT-GUIDE.md");
+        }
+        continue mainloop;
+        
       case "deploy":
         try {
           // Quick system check before deployment

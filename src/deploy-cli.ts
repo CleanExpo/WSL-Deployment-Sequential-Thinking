@@ -2,11 +2,14 @@
 
 /**
  * Direct deployment CLI for seamless `vercel --prod` replacement
- * This mimics the vercel CLI but with comprehensive pre-deployment checks
+ * This works with any project directory and discovers project context automatically
  */
 
 import { seamlessVercelDeploy } from "./deployment-orchestrator.js";
+import { discoverProjectContext, analyzeDeploymentReadiness } from "./project-context.js";
 import process from "process";
+import path from "path";
+import fs from "fs";
 
 async function main() {
   const args = process.argv.slice(2);
@@ -18,16 +21,60 @@ async function main() {
                        args[args.indexOf('-m') + 1] ||
                        'Auto deployment from CLI';
 
+  // Check if we're in a valid project directory
+  const workingDir = process.cwd();
   console.log(`🎯 ${isProd ? 'Production' : 'Development'} deployment initiated`);
-  console.log(`📝 Commit message: "${commitMessage}"`);
+  console.log(`� Working directory: ${workingDir}`);
+  console.log(`�📝 Commit message: "${commitMessage}"`);
+
+  // Discover project context
+  const context = discoverProjectContext(workingDir);
+  
+  // Quick validation
+  if (!context.packageJson) {
+    console.error('\n❌ No package.json found in current directory');
+    console.error('💡 Make sure you\'re in the root of a Node.js project');
+    console.error('📍 Current directory:', workingDir);
+    console.error('\n🔍 Looking for these files:');
+    console.error('   • package.json (required)');
+    console.error('   • .env files (recommended)');
+    console.error('   • Git repository (.git folder)');
+    process.exit(1);
+  }
+
+  if (!context.gitRepo) {
+    console.error('\n⚠️  No Git repository found');
+    console.error('💡 Initialize Git first: git init');
+    console.error('💡 Add remote: git remote add origin YOUR_GITHUB_URL');
+    process.exit(1);
+  }
+
+  // Show project info
+  console.log('\n📊 Project detected:');
+  console.log(`   Name: ${context.packageJson.name || 'unnamed'}`);
+  console.log(`   Framework: ${context.framework || 'Generic Node.js'}`);
+  console.log(`   Strategy: ${context.deploymentStrategy}`);
+  
+  // Check deployment readiness
+  const readiness = analyzeDeploymentReadiness(context);
+  if (!readiness.ready) {
+    console.log('\n⚠️  Project issues detected:');
+    readiness.issues.forEach(issue => console.log(`   • ${issue}`));
+    console.log('\n💡 Run `npm run mcp-helper` for assistance with these issues');
+  }
 
   try {
     await seamlessVercelDeploy(commitMessage);
     console.log('\n🎉 Deployment completed successfully!');
+    console.log('🌐 Your project should now be live on Vercel');
     process.exit(0);
   } catch (error: any) {
     console.error('\n💥 Deployment failed:', error.message);
-    console.error('\n🛠️  Run `npm run mcp-helper` for troubleshooting assistance');
+    console.error('\n🛠️  Troubleshooting options:');
+    console.error('   • Run `npm run mcp-helper` for guided troubleshooting');
+    console.error('   • Check TROUBLESHOOTING.md for common issues');
+    console.error('   • Verify environment variables in .env files');
+    console.error('   • Test SSH connection: ssh -T git@github.com');
     process.exit(1);
   }
 }
