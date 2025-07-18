@@ -125,6 +125,21 @@ function runGitAll(commitMsg: string) {
 }
 
 function vercelDeploy() {
+  // Detect Next.js misconfiguration: API-only build script with Next.js present
+  const context = discoverProjectContext();
+  const hasNext = context.framework && context.framework.toLowerCase().includes("next");
+  const buildScript = context.buildScript || "";
+  const apiOnlyBuild = buildScript.trim().startsWith("echo") && buildScript.includes("No build required for API endpoints");
+
+  if (hasNext && apiOnlyBuild) {
+    safePrint("\n❌ Detected Next.js in your project, but your build script disables Next.js build (API-only mode).\n");
+    safePrint("This will cause Vercel to fail: Next.js expects a build output, but your build script is 'echo ...'.");
+    safePrint("\n💡 To fix: Set your build script in package.json to 'next build' or remove the custom build script if you want a full Next.js deployment.\n");
+    safePrint("Example:");
+    safePrint('  "build": "next build"');
+    throw new Error("Next.js misconfiguration: API-only build script with Next.js detected");
+  }
+
   const deploy = spawnSync("vercel", ["--prod"], { stdio: "inherit" });
   if (deploy.status !== 0) {
     safePrint("❌ Vercel deploy failed. Double-check login or token.");

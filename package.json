@@ -30,7 +30,8 @@
     "claude-deploy": "npm run vercel-prod",
     "mcp-helper": "ts-node --esm src/cli.ts",
     "mcp-helper-built": "npm run build && node dist/cli.js",
-    "install-global": "npm run build && npm link"
+    "install-global": "npm run build && npm link",
+    "fix-vercel": "tsx scripts/fix-vercel-deployment.ts"
   },
   "bin": {
     "vercel-enhanced": "dist/vercel-wrapper.js",

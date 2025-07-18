@@ -2,6 +2,7 @@ import { execSync, spawn } from "child_process";
 import { checkAllPrerequisites, setupEnvironmentVariables } from "./system-check.js";
 import { sshSetupWizard, checkGitHubSSHConnection } from "./ssh-setup.js";
 import { gitStageCommitPush } from "./git-helper.js";
+import { deployToVercelWithFixes } from "./vercel-helper.js";
 import { 
   discoverProjectContext, 
   loadProjectEnvironment, 
@@ -359,45 +360,14 @@ export class DeploymentOrchestrator {
    */
   private async deployToVercel(): Promise<void> {
     console.log("🚀 Deploying to Vercel...");
-
-    return new Promise((resolve, reject) => {
-      // Build the Vercel command
-      const vercelArgs = ['--prod'];
-      
-      // Add token if available
-      if (process.env.VERCEL_TOKEN) {
-        vercelArgs.push('--token', process.env.VERCEL_TOKEN);
-      }
-
-      // Add project ID if available
-      if (process.env.VERCEL_PROJECT_ID) {
-        vercelArgs.push('--scope', process.env.VERCEL_ORG_ID || 'personal');
-      }
-
-      console.log(`🔧 Running: vercel ${vercelArgs.join(' ')}`);
-
-      const deployProcess = spawn('vercel', vercelArgs, { 
-        stdio: 'inherit',
-        env: { 
-          ...process.env,
-          // Ensure Vercel CLI uses the token
-          VERCEL_TOKEN: process.env.VERCEL_TOKEN 
-        }
-      });
-
-      deployProcess.on('close', (code) => {
-        if (code === 0) {
-          console.log("✅ Vercel deployment completed successfully");
-          resolve();
-        } else {
-          reject(new Error(`Vercel deployment failed with exit code ${code}`));
-        }
-      });
-
-      deployProcess.on('error', (error) => {
-        reject(new Error(`Vercel deployment process error: ${error.message}`));
-      });
-    });
+    
+    try {
+      await deployToVercelWithFixes(this.projectRoot);
+      console.log("✅ Vercel deployment completed");
+    } catch (error) {
+      console.error("❌ Vercel deployment failed:", error);
+      throw error;
+    }
   }
 
   /**
