@@ -36,12 +36,25 @@ npm start
 
 ## Deployment MCP Pipeline
 
-This project provides a script (`runMCPDeploy`) which:
-- Ensures files created by Claude Code or tools are within the project root
-- Stages/commits/pushes all changes (with SSH agent checks)
-- Triggers a Vercel production deploy and streams logs to your terminal
+This project provides multiple ways to deploy your changes:
 
-### Usage
+### One-Step Publish (for non-coders)
+
+To quickly commit *and* deploy your changes to Vercel:
+
+```bash
+npm run mcp-helper
+```
+
+This command walks you through (in plain English):
+- Checking for misplaced files
+- Stage & commit all updates
+- Push to GitHub (with SSH tips!)
+- Launch a Vercel deploy (with real-time logs)
+
+### Advanced Pipeline
+
+For developers, use the programmatic approach:
 
 ```typescript
 import { runMCPDeploy } from './src/mcp-pipeline.js';
@@ -49,6 +62,11 @@ import { runMCPDeploy } from './src/mcp-pipeline.js';
 // Deploy with automatic commit and Vercel trigger
 runMCPDeploy("feat: add new MCP functionality");
 ```
+
+This script:
+- Ensures files created by Claude Code or tools are within the project root
+- Stages/commits/pushes all changes (with SSH agent checks)
+- Triggers a Vercel production deploy and streams logs to your terminal
 
 ### Edge Cases Handled
 

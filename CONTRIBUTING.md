@@ -2,6 +2,18 @@
 
 Thank you for your interest in contributing to the WSL Deployment Sequential Thinking MCP framework!
 
+## Quick Start for Non-Coders & New Team Members
+
+**To publish your updates, run:**
+
+```bash
+npm run mcp-helper
+```
+
+- Follow the on-screen menu prompts to stage, commit, push, and deploy.
+- The tool provides plain-English guidance for every step.
+- All common problems are auto-detected and explained.
+
 ## Development Guidelines
 
 ### File Management
@@ -10,7 +22,8 @@ Thank you for your interest in contributing to the WSL Deployment Sequential Thi
 - Always validate paths before file operations
 
 ### Deployment Pipeline
-- Run `runMCPDeploy("your commit message")` to stage, commit, push, and trigger Vercel deployment
+- **Easy Way**: Run `npm run mcp-helper` for a user-friendly menu interface
+- **Advanced**: Run `runMCPDeploy("your commit message")` to stage, commit, push, and trigger Vercel deployment
 - The pipeline automatically scans for orphaned files and validates project integrity
 - All changes are committed with descriptive messages and pushed to GitHub
 
@@ -26,6 +39,11 @@ eval "$(ssh-agent -s)" && ssh-add ~/.ssh/id_rsa
 # Verify your remote URL is SSH-based
 git remote set-url origin git@github.com:CleanExpo/WSL-Deployment-Sequential-Thinking.git
 ```
+
+#### Common Problems
+- **"git" errors**: Are you connected to WiFi? Is your SSH key/agent ready?
+- **"Vercel" errors**: Run `vercel login` or check that your Vercel token is valid.
+- **Misplaced files**: Use the MCP Helper option "Check for misplaced files and fix" to recover orphaned code.
 
 #### WSL/Windows Path Issues
 - Always use `path.normalize()` in scripts to resolve path differences
